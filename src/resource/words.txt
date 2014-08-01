@@ -1,0 +1,9 @@
+some
+random
+words
+for
+testing
+storm
+hdfs
+hbase
+kafka

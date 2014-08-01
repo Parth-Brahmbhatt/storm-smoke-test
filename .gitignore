@@ -1,0 +1,16 @@
+/classes
+/lib
+deploy/lib
+deploy/logs
+.emacs-project
+*.jar
+*.zip
+*.tar.gz
+*.iml
+target
+/.project/
+*.ipr
+*.iws
+.idea
+.*
+!/.gitignore
