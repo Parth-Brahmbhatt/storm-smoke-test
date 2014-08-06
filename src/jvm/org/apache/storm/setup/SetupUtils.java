@@ -18,9 +18,23 @@
 
 package org.apache.storm.setup;
 
+import com.google.common.collect.ImmutableMap;
+import com.netflix.astyanax.AstyanaxContext;
+import com.netflix.astyanax.Keyspace;
+import com.netflix.astyanax.connectionpool.NodeDiscoveryType;
+import com.netflix.astyanax.connectionpool.exceptions.BadRequestException;
+import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
+import com.netflix.astyanax.connectionpool.impl.ConnectionPoolConfigurationImpl;
+import com.netflix.astyanax.connectionpool.impl.CountingConnectionPoolMonitor;
+import com.netflix.astyanax.impl.AstyanaxConfigurationImpl;
+import com.netflix.astyanax.model.ColumnFamily;
+import com.netflix.astyanax.serializers.StringSerializer;
+import com.netflix.astyanax.thrift.ThriftFamilyFactory;
 import kafka.admin.AdminUtils;
 import kafka.utils.ZKStringSerializer$;
 import org.I0Itec.zkclient.ZkClient;
+import org.apache.activemq.ActiveMQConnectionFactory;
+import org.apache.activemq.broker.DestinationAlreadyExistsException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HColumnDescriptor;
@@ -30,6 +44,10 @@ import org.apache.hadoop.hbase.client.HBaseAdmin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.jms.Connection;
+import javax.jms.ConnectionFactory;
+import javax.jms.Destination;
+import javax.jms.Session;
 import java.io.IOException;
 import java.util.Properties;
 
@@ -72,4 +90,54 @@ public class SetupUtils {
         hBaseAdmin.createTable(tableDescriptor);
     }
 
+    public static void setupCassandraKeySpace(String cassandraConnectionString, String keySpaceName,
+                                              String columnFamily) throws ConnectionException {
+
+        try {
+            AstyanaxContext<Keyspace> context = new AstyanaxContext.Builder()
+                    .forCluster("ClusterName")
+                    .forKeyspace(keySpaceName)
+                    .withAstyanaxConfiguration(new AstyanaxConfigurationImpl()
+                                    .setDiscoveryType(NodeDiscoveryType.RING_DESCRIBE)
+                    )
+                    .withConnectionPoolConfiguration(new ConnectionPoolConfigurationImpl("MyConnectionPool")
+                                    .setMaxConnsPerHost(1)
+                                    .setSeeds(cassandraConnectionString)
+                    )
+                    .withConnectionPoolMonitor(new CountingConnectionPoolMonitor())
+                    .buildKeyspace(ThriftFamilyFactory.getInstance());
+
+            context.start();
+            Keyspace keyspace = context.getClient();
+
+            // Using simple strategy
+            keyspace.createKeyspace(ImmutableMap.<String, Object>builder()
+                            .put("strategy_options", ImmutableMap.<String, Object>builder()
+                                    .put("replication_factor", "1")
+                                    .build())
+                            .put("strategy_class", "SimpleStrategy")
+                            .build()
+            );
+
+            ColumnFamily<String, String> CF_STANDARD1 = ColumnFamily.newColumnFamily(columnFamily,
+                    StringSerializer.get(), StringSerializer.get());
+
+            keyspace.createColumnFamily(CF_STANDARD1, null);
+            context.shutdown();
+        } catch(BadRequestException e) {
+            LOG.warn("could not setup cassandra keyspace , assuming keyspace already exists.", e);
+        }
+    }
+
+    public static void setupJMSQueue(String jmsConnString, String queueName) throws Exception {
+        ConnectionFactory connectionFactory = new ActiveMQConnectionFactory(jmsConnString);
+        Connection connection = connectionFactory.createConnection();
+        connection.start();
+        Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
+        try {
+            Destination destination = session.createQueue(queueName);
+        } catch(DestinationAlreadyExistsException e) {
+            LOG.warn("Could not create a new queue as one already exists " + queueName, e);
+        }
+    }
 }

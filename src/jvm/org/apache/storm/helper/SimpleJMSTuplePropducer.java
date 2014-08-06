@@ -15,38 +15,37 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.storm.helper;
 
-package org.apache.storm.bolt;
-
-import backtype.storm.topology.BasicOutputCollector;
+import backtype.storm.contrib.jms.JmsTupleProducer;
 import backtype.storm.topology.OutputFieldsDeclarer;
-import backtype.storm.topology.base.BaseBasicBolt;
 import backtype.storm.tuple.Fields;
-import backtype.storm.tuple.Tuple;
 import backtype.storm.tuple.Values;
 
-import java.util.HashMap;
-import java.util.Map;
+import javax.jms.JMSException;
+import javax.jms.Message;
+import javax.jms.TextMessage;
 
-/**
- * Simple wordCount implementation that keeps an in memory state for each word an corresponding count.
- */
-public class WordCount extends BaseBasicBolt {
-    Map<String, Integer> counts = new HashMap<String, Integer>();
+public class SimpleJMSTuplePropducer implements JmsTupleProducer {
+
+    private Fields fields;
+
+    public SimpleJMSTuplePropducer(Fields fields) {
+        this.fields = fields;
+    }
 
     @Override
-    public void execute(Tuple tuple, BasicOutputCollector collector) {
-        String word = tuple.getString(0);
-        Integer count = counts.get(word);
-        if (count == null)
-            count = 0;
-        count++;
-        counts.put(word, count);
-        collector.emit(new Values(word, count));
+    public Values toTuple(Message msg) throws JMSException {
+        if (msg instanceof TextMessage) {
+            String textMessage = ((TextMessage) msg).getText();
+            return new Values(textMessage);
+        } else {
+            return null;
+        }
     }
 
     @Override
     public void declareOutputFields(OutputFieldsDeclarer declarer) {
-        declarer.declare(new Fields("word", "count"));
+        declarer.declare(fields);
     }
 }

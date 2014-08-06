@@ -50,21 +50,31 @@ public abstract class AbstractWordCount implements  SmokeTest {
 
     protected String kafkaBrokerlist;
 
-    public AbstractWordCount(String zkConnString, String kafkaBrokerlist, String hdfsUrl, String hbaseUrl) {
+    protected String cassandraConnString;
+
+    protected String jmsConnectionString;
+
+    protected AbstractWordCount(String zkConnString, String kafkaBrokerlist, String hdfsUrl, String hbaseUrl,
+                                String cassandraConnString, String jmsConnectionString) {
         this.zkConnString = zkConnString;
         this.hdfsUrl = hdfsUrl;
         this.hbaseUrl = hbaseUrl;
         this.kafkaBrokerlist = kafkaBrokerlist;
+        this.cassandraConnString = cassandraConnString;
+        this.jmsConnectionString = jmsConnectionString;
     }
 
     @Override
     public void setup() throws Exception {
+        SetupUtils.setupCassandraKeySpace(this.cassandraConnString, getKeySpaceName(), getColumnFamily());
+        SetupUtils.setupJMSQueue(this.jmsConnectionString, getQueueName());
         SetupUtils.createKafkaTopic(this.zkConnString, getTopicName());
         SetupUtils.createHBaseTable(this.hbaseUrl, getTableName(), getColumnFamily());
     }
 
     @Override
     public void cleanup() throws Exception {
+        CleanupUtils.deleteCassandraKeySpace(cassandraConnString, getKeySpaceName());
         CleanupUtils.deleteHBaseTable(this.hbaseUrl, getTableName());
         CleanupUtils.deleteHdfsDirs(this.hdfsUrl, Lists.newArrayList(getHDfsSrcDir(), getHDfsDestDir()));
         CleanupUtils.deleteKafkaTopic(this.zkConnString, getTopicName());
@@ -83,6 +93,12 @@ public abstract class AbstractWordCount implements  SmokeTest {
         hbaseColNameToTypeMap.put("count", Long.class);
         VerifyUtils.verifyHdfs(this.hdfsUrl, getHDfsSrcDir(), expectedLines);
         VerifyUtils.verifyHbase(this.hbaseUrl, getTableName(), getColumnFamily(), hbaseColNameToTypeMap, expectedLines);
+
+        Map<String, Class> cassandraColNameToTypeMap = Maps.newLinkedHashMap();
+        cassandraColNameToTypeMap.put("word", String.class);
+        cassandraColNameToTypeMap.put("count", String.class);
+
+        VerifyUtils.verifyCassandra(this.cassandraConnString, getKeySpaceName(), getColumnFamily(), cassandraColNameToTypeMap, expectedLines);
 
         LOG.info("verification succeeded.");
     }
@@ -107,10 +123,11 @@ public abstract class AbstractWordCount implements  SmokeTest {
         return wordCounts;
     }
 
-    public abstract String getTopicName();
-    public abstract String getTableName();
-    public abstract String getColumnFamily();
-    public abstract String getHDfsSrcDir();
-    public abstract String getHDfsDestDir();
-
+    protected abstract String getTopicName();
+    protected abstract String getTableName();
+    protected abstract String getColumnFamily();
+    protected abstract String getHDfsSrcDir();
+    protected abstract String getHDfsDestDir();
+    protected abstract String getKeySpaceName();
+    protected abstract String getQueueName();
 }

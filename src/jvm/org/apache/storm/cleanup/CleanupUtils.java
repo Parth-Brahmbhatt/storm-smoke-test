@@ -18,6 +18,18 @@
 
 package org.apache.storm.cleanup;
 
+import com.google.common.collect.ImmutableMap;
+import com.netflix.astyanax.AstyanaxContext;
+import com.netflix.astyanax.Keyspace;
+import com.netflix.astyanax.connectionpool.NodeDiscoveryType;
+import com.netflix.astyanax.connectionpool.exceptions.BadRequestException;
+import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
+import com.netflix.astyanax.connectionpool.impl.ConnectionPoolConfigurationImpl;
+import com.netflix.astyanax.connectionpool.impl.CountingConnectionPoolMonitor;
+import com.netflix.astyanax.impl.AstyanaxConfigurationImpl;
+import com.netflix.astyanax.model.ColumnFamily;
+import com.netflix.astyanax.serializers.StringSerializer;
+import com.netflix.astyanax.thrift.ThriftFamilyFactory;
 import kafka.admin.AdminUtils;
 import kafka.utils.ZKStringSerializer$;
 import org.I0Itec.zkclient.ZkClient;
@@ -26,10 +38,17 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HTableDescriptor;
+import org.apache.hadoop.hbase.TableNotEnabledException;
 import org.apache.hadoop.hbase.client.HBaseAdmin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.jms.Connection;
+import javax.jms.ConnectionFactory;
+import javax.jms.Destination;
+import javax.jms.Session;
+import javax.naming.Context;
+import javax.naming.InitialContext;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -70,9 +89,42 @@ public class CleanupUtils {
             HTableDescriptor[] tables = hBaseAdmin.listTables();
             for (HTableDescriptor table : tables) {
                 if (table.getNameAsString().equals(tableName)) {
-                    hBaseAdmin.disableTable(tableName);
+                    try {
+                        hBaseAdmin.disableTable(tableName);
+                    } catch (TableNotEnabledException e) {
+                        LOG.info(tableName + " failed to disable as it was never enabled", e);
+                    }
                     hBaseAdmin.deleteTable(tableName);
                 }
             }
+    }
+
+    public static void deleteCassandraKeySpace(String cassandraConnString, String keySpace) throws Exception {
+
+        try {
+            AstyanaxContext<Keyspace> context = new AstyanaxContext.Builder()
+                    .forCluster("ClusterName")
+                    .forKeyspace(keySpace)
+                    .withAstyanaxConfiguration(new AstyanaxConfigurationImpl()
+                                    .setDiscoveryType(NodeDiscoveryType.RING_DESCRIBE)
+                    )
+                    .withConnectionPoolConfiguration(new ConnectionPoolConfigurationImpl("MyConnectionPool")
+                                    .setMaxConnsPerHost(1)
+                                    .setSeeds(cassandraConnString)
+                    )
+                    .withConnectionPoolMonitor(new CountingConnectionPoolMonitor())
+                    .buildKeyspace(ThriftFamilyFactory.getInstance());
+
+            context.start();
+            Keyspace keyspace = context.getClient();
+            keyspace.dropKeyspace();
+            context.shutdown();
+        } catch (BadRequestException e) {
+            LOG.warn("Could not delete cassandra keyspace, assuming it does not exist.", e);
+        }
+    }
+
+    public static void deleteQueue(String jmsConnString, String queueName) throws Exception {
+
     }
 }

@@ -72,16 +72,20 @@ public class TestRunner {
         String kafkaBroker = prop.getProperty("kafkaBroker");
         String hdfsUrl = prop.getProperty("hdfsUrl");
         String hbaseUrl = prop.getProperty("hbaseUrl");
+        String cassandraUrl = prop.getProperty("cassandraUrl");
+        String jmsUrl = prop.getProperty("jmsUrl");
 
         Validate.notEmpty(zkConnString, "property file must specify property zkUrl");
         Validate.notEmpty(kafkaBroker, "property file must specify property kafkaBroker");
         Validate.notEmpty(hdfsUrl, "property file must specify property hdfsUrl");
         Validate.notEmpty(hbaseUrl, "property file must specify property hbaseUrl");
+        Validate.notEmpty(jmsUrl, "property file must specify property jmsUrl");
+        Validate.notEmpty(cassandraUrl, "property file must specify property cassandraUrl");
 
         //TODO: Would be nice to use spring or guice so we can just inject new smoke test implementations.
         List<SmokeTest> smokeTests = Lists.newArrayList();
-        smokeTests.add(new WordCountSmokeTest(zkConnString, kafkaBroker, hdfsUrl, hbaseUrl));
-        smokeTests.add(new WordCountTridentSmokeTest(zkConnString, kafkaBroker, hdfsUrl, hbaseUrl));
+        smokeTests.add(new WordCountSmokeTest(zkConnString, kafkaBroker, hdfsUrl, hbaseUrl, cassandraUrl, jmsUrl ));
+        smokeTests.add(new WordCountTridentSmokeTest(zkConnString, kafkaBroker, hdfsUrl, hbaseUrl, cassandraUrl, jmsUrl));
 
         boolean success = true;
         Map<String, Throwable> testToErrorMap = Maps.newHashMap();
@@ -120,6 +124,7 @@ public class TestRunner {
         }
 
         reportResult(success, testToErrorMap);
+        System.exit(0);
     }
 
 

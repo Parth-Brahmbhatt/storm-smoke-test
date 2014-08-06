@@ -38,7 +38,7 @@ import org.slf4j.LoggerFactory;
 public class WordCountSmokeTest extends AbstractWordCount {
     private static final Logger LOG = LoggerFactory.getLogger(WordCountSmokeTest.class);
 
-    private static final String TOPIC_NAME = "storm-smoke-test-tmp";
+    private static final String TOPIC_NAME = "storm-smoke-test";
 
     private static final String TABLE_NAME = "WordCount";
 
@@ -48,22 +48,15 @@ public class WordCountSmokeTest extends AbstractWordCount {
 
     private static final String COLUMN_FAMILY = "columnFamily";
 
-    public WordCountSmokeTest(String zkConnString, String kafkaBrokerlist, String hdfsUrl, String hbaseUrl) {
-        super(zkConnString, kafkaBrokerlist, hdfsUrl, hbaseUrl);
+    private static final String KEY_SPACE_NAME = "smokeTestKeyspace";
+
+    private static final String JMS_QUEUE_NAME ="dynamicQueues/FOO.BAR";
+
+    public WordCountSmokeTest(String zkConnString, String kafkaBrokerlist, String hdfsUrl, String hbaseUrl,
+                              String cassandraConnString, String jmsConnectionString) {
+        super(zkConnString, kafkaBrokerlist, hdfsUrl, hbaseUrl, cassandraConnString, jmsConnectionString);
     }
 
-    @Override
-    public void setup() throws Exception {
-        SetupUtils.createKafkaTopic(this.zkConnString, TOPIC_NAME);
-        SetupUtils.createHBaseTable(this.hbaseUrl, TABLE_NAME, COLUMN_FAMILY);
-    }
-
-    @Override
-    public void cleanup() throws Exception {
-        CleanupUtils.deleteHBaseTable(this.hbaseUrl, TABLE_NAME);
-        CleanupUtils.deleteHdfsDirs(this.hdfsUrl, Lists.newArrayList(HDFS_SRC_DIR, HDFS_ROTATION_DIR));
-        CleanupUtils.deleteKafkaTopic(this.zkConnString, TOPIC_NAME);
-    }
 
     @Override
     public StormTopology buildTopology(Config topologyConf) throws Exception {
@@ -71,15 +64,31 @@ public class WordCountSmokeTest extends AbstractWordCount {
 
         TopologyBuilder builder = new TopologyBuilder();
         builder.setSpout("randomWords", wordSpout, 1);
+
         builder.setBolt("writeToKafka", ConnectorUtil.getKafkaBolt(TOPIC_NAME, kafkaBrokerlist,
                 "word", "word", topologyConf), 1).globalGrouping("randomWords");
+
+        builder.setBolt("writeToJMS", ConnectorUtil.getJmsBolt(jmsConnectionString, JMS_QUEUE_NAME), 1)
+                .globalGrouping("randomWords");
+
         builder.setSpout("kafkaSpout", ConnectorUtil.getKafkaSpout(zkConnString, TOPIC_NAME));
-        builder.setBolt("wordCount", new WordCount(), 1).globalGrouping("kafkaSpout");
+
+        builder.setSpout("jmsSpout", ConnectorUtil.getJmsSpout(jmsConnectionString, JMS_QUEUE_NAME, "word"));
+
+        builder.setBolt("wordCountKafka", new WordCount(), 1).globalGrouping("kafkaSpout");
+
+        builder.setBolt("wordCountJMS", new WordCount(), 1).globalGrouping("jmsSpout");
+
         builder.setBolt("hdfsBolt",
-                ConnectorUtil.getHdfsBolt(hdfsUrl, HDFS_SRC_DIR, HDFS_ROTATION_DIR), 1).globalGrouping("wordCount");
+                ConnectorUtil.getHdfsBolt(hdfsUrl, HDFS_SRC_DIR, HDFS_ROTATION_DIR), 1).globalGrouping("wordCountKafka");
+
         builder.setBolt("hbaseBolt",
                 ConnectorUtil.getHBaseBolt(hbaseUrl, TABLE_NAME, "word", COLUMN_FAMILY, Lists.newArrayList("word"),
-                        Lists.newArrayList("count"), topologyConf), 1).globalGrouping("wordCount");
+                        Lists.newArrayList("count"), topologyConf), 1).globalGrouping("wordCountJMS");
+
+        builder.setBolt("cassandraBolt",
+                ConnectorUtil.getCassandraBolt(cassandraConnString, KEY_SPACE_NAME, COLUMN_FAMILY, "word", topologyConf), 1)
+                .globalGrouping("wordCountKafka");
 
         return builder.createTopology();
     }
@@ -107,6 +116,15 @@ public class WordCountSmokeTest extends AbstractWordCount {
     @Override
     public String getHDfsDestDir() {
         return HDFS_ROTATION_DIR;
+    }
+
+    @Override
+    public String getKeySpaceName() {
+        return KEY_SPACE_NAME;
+    }
+
+    protected String getQueueName() {
+        return JMS_QUEUE_NAME;
     }
 }
 

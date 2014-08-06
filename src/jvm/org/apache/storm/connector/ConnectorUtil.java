@@ -18,7 +18,20 @@
 
 package org.apache.storm.connector;
 
+import backtype.storm.Config;
+import backtype.storm.contrib.jms.JmsProvider;
+import backtype.storm.contrib.jms.bolt.JmsBolt;
+import backtype.storm.contrib.jms.spout.JmsSpout;
+import backtype.storm.spout.SchemeAsMultiScheme;
+import backtype.storm.spout.SpoutOutputCollector;
+import backtype.storm.topology.IRichBolt;
 import backtype.storm.tuple.Fields;
+import com.google.common.collect.Lists;
+import com.hmsonline.storm.cassandra.StormCassandraConstants;
+import com.hmsonline.storm.cassandra.bolt.CassandraBatchingBolt;
+import com.hmsonline.storm.cassandra.bolt.CassandraBolt;
+import com.hmsonline.storm.cassandra.bolt.mapper.DefaultTupleMapper;
+import com.hmsonline.storm.cassandra.bolt.mapper.TupleMapper;
 import org.apache.storm.hbase.bolt.HBaseBolt;
 import org.apache.storm.hbase.bolt.mapper.SimpleHBaseMapper;
 import org.apache.storm.hdfs.bolt.HdfsBolt;
@@ -31,14 +44,16 @@ import org.apache.storm.hdfs.bolt.rotation.FileSizeRotationPolicy;
 import org.apache.storm.hdfs.bolt.sync.CountSyncPolicy;
 import org.apache.storm.hdfs.bolt.sync.SyncPolicy;
 import org.apache.storm.hdfs.common.rotation.MoveFileAction;
-import storm.kafka.BrokerHosts;
-import storm.kafka.KafkaSpout;
-import storm.kafka.SpoutConfig;
-import storm.kafka.ZkHosts;
+import org.apache.storm.helper.SimpleJMSTuplePropducer;
+import org.apache.storm.helper.SimpleJmsProducer;
+import org.apache.storm.helper.SimpleJmsProvider;
+import storm.kafka.*;
 import storm.kafka.bolt.KafkaBolt;
 import storm.kafka.bolt.mapper.FieldNameBasedTupleToKafkaMapper;
 import storm.kafka.bolt.selector.DefaultTopicSelector;
+import storm.kafka.trident.GlobalPartitionInformation;
 
+import javax.jms.Session;
 import java.util.*;
 
 /**
@@ -60,31 +75,49 @@ public class ConnectorUtil {
 
     public static KafkaSpout getKafkaSpout(String zkConnString, String topicName) {
         BrokerHosts hosts = new ZkHosts(zkConnString);
+
         SpoutConfig spoutConfig = new SpoutConfig(hosts, topicName, "/" + topicName, UUID.randomUUID().toString());
         //spoutConfig.forceFromStart = true;
+        spoutConfig.scheme = new SchemeAsMultiScheme(new StringScheme());
         return new KafkaSpout(spoutConfig);
+    }
+
+    public static JmsBolt getJmsBolt(String jmsUrl, String queueName) throws Exception {
+        JmsBolt jmsBolt = new JmsBolt();
+        jmsBolt.setAutoAck(true);
+        jmsBolt.setJmsAcknowledgeMode(Session.CLIENT_ACKNOWLEDGE);
+        jmsBolt.setJmsMessageProducer(new SimpleJmsProducer());
+        jmsBolt.setJmsProvider(new SimpleJmsProvider(jmsUrl, queueName));
+
+        return jmsBolt;
+    }
+
+    public static JmsSpout getJmsSpout(String jmsUrl, String queueName, String... fields) throws Exception {
+        JmsSpout spout = new JmsSpout();
+        spout.setJmsProvider(new SimpleJmsProvider(jmsUrl, queueName));
+        spout.setJmsTupleProducer(new SimpleJMSTuplePropducer(new Fields(fields)));
+        spout.setJmsAcknowledgeMode(Session.CLIENT_ACKNOWLEDGE);
+        spout.setRecoveryPeriod(10);
+        return spout;
     }
 
     public static HdfsBolt getHdfsBolt(String fsUrl, String srcDir, String rotationDir) {
         // sync the filesystem after every tuple
         SyncPolicy syncPolicy = new CountSyncPolicy(1);
 
-        // rotate files when they reach 1KB
-        FileRotationPolicy rotationPolicy = new FileSizeRotationPolicy(0.001f, FileSizeRotationPolicy.Units.KB);
-
         FileNameFormat fileNameFormat = new DefaultFileNameFormat()
                 .withPath(srcDir)
                 .withExtension(".txt");
 
-        // use "|" instead of "," for field delimiter
         RecordFormat format = new DelimitedRecordFormat().withFieldDelimiter(",");
+        FileRotationPolicy rotationPolicy = new FileSizeRotationPolicy(1f, FileSizeRotationPolicy.Units.KB);
 
         HdfsBolt bolt = new HdfsBolt()
                 .withFsUrl(fsUrl)
                 .withFileNameFormat(fileNameFormat)
                 .withRecordFormat(format)
-                .withRotationPolicy(rotationPolicy)
                 .withSyncPolicy(syncPolicy)
+                .withRotationPolicy(rotationPolicy)
                 .addRotationAction(new MoveFileAction().toDestination(rotationDir));
 
         return bolt;
@@ -107,5 +140,18 @@ public class ConnectorUtil {
                 .withConfigKey("hbase.conf");
     }
 
+    public static IRichBolt getCassandraBolt(String cassandraConnectionString, String keySpace, String columnFamily,
+                                                 String rowKey, Map topologyConfig) {
+        Map<String, Object> cassandraConfig = new HashMap<String, Object>();
+        cassandraConfig.put(StormCassandraConstants.CASSANDRA_HOST, cassandraConnectionString);
+        cassandraConfig.put(StormCassandraConstants.CASSANDRA_KEYSPACE, Lists.newArrayList(keySpace));
+        String configKey = "cassandra-config";
+        topologyConfig.put(configKey, cassandraConfig);
+
+        TupleMapper<String, String, String> tupleMapper = new DefaultTupleMapper(keySpace, columnFamily, rowKey);
+
+        topologyConfig.put(configKey, cassandraConfig);
+        return new CassandraBatchingBolt<String, String, String>(configKey, tupleMapper);
+    }
 
 }

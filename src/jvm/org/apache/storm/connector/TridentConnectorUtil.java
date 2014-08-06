@@ -18,7 +18,14 @@
 
 package org.apache.storm.connector;
 
+import backtype.storm.contrib.jms.TridentJmsSpout;
+import backtype.storm.contrib.jms.trident.JmsState;
+import backtype.storm.contrib.jms.trident.JmsStateFactory;
+import backtype.storm.spout.SchemeAsMultiScheme;
 import backtype.storm.tuple.Fields;
+import com.google.common.collect.Lists;
+import com.hmsonline.storm.cassandra.StormCassandraConstants;
+import com.hmsonline.storm.cassandra.trident.CassandraStateFactory;
 import org.apache.hadoop.hbase.client.Durability;
 import org.apache.storm.hbase.trident.mapper.SimpleTridentHBaseMapper;
 import org.apache.storm.hbase.trident.mapper.TridentHBaseMapper;
@@ -26,25 +33,28 @@ import org.apache.storm.hbase.trident.state.HBaseState;
 import org.apache.storm.hbase.trident.state.HBaseStateFactory;
 import org.apache.storm.hdfs.trident.HdfsState;
 import org.apache.storm.hdfs.trident.HdfsStateFactory;
+import org.apache.storm.hdfs.trident.format.DefaultFileNameFormat;
+import org.apache.storm.hdfs.trident.format.DelimitedRecordFormat;
 import org.apache.storm.hdfs.trident.format.FileNameFormat;
 import org.apache.storm.hdfs.trident.format.RecordFormat;
+import org.apache.storm.hdfs.trident.rotation.FileRotationPolicy;
 import org.apache.storm.hdfs.trident.rotation.FileSizeRotationPolicy;
+import org.apache.storm.helper.SimpleJMSTuplePropducer;
+import org.apache.storm.helper.SimpleJmsProvider;
+import org.apache.storm.helper.SimpleTridentJmsMessageProducer;
 import storm.kafka.BrokerHosts;
+import storm.kafka.StringScheme;
 import storm.kafka.ZkHosts;
 import storm.kafka.bolt.KafkaBolt;
 import storm.kafka.trident.OpaqueTridentKafkaSpout;
 import storm.kafka.trident.TridentKafkaConfig;
 import storm.kafka.trident.TridentKafkaStateFactory;
-import storm.kafka.trident.selector.DefaultTopicSelector;
 import storm.kafka.trident.mapper.FieldNameBasedTupleToKafkaMapper;
-import org.apache.storm.hdfs.trident.format.DefaultFileNameFormat;
-import org.apache.storm.hdfs.trident.format.DelimitedRecordFormat;
-import org.apache.storm.hdfs.trident.rotation.FileRotationPolicy;
+import storm.kafka.trident.selector.DefaultTopicSelector;
+import storm.trident.spout.ITridentSpout;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
+import javax.jms.Session;
+import java.util.*;
 
 /**
  * Provides various trident spout and bolt connectors.
@@ -55,6 +65,7 @@ public class TridentConnectorUtil {
         TridentKafkaConfig kafkaConfig = new TridentKafkaConfig(hosts, topicName);
         //topologyConfig.put("topology.spout.max.batch.size", 1);
         //kafkaConfig.forceFromStart = true;
+        kafkaConfig.scheme = new SchemeAsMultiScheme(new StringScheme());
         return new OpaqueTridentKafkaSpout(kafkaConfig);
     }
 
@@ -70,6 +81,25 @@ public class TridentConnectorUtil {
                 .withTridentTupleToKafkaMapper(new FieldNameBasedTupleToKafkaMapper(keyField, messageField));
     }
 
+    public static JmsStateFactory getJmsStateFactory(String jmsUrl, String queueName) throws Exception {
+        JmsState.Options options = new JmsState.Options()
+                .withJmsProvider(new SimpleJmsProvider(jmsUrl, queueName))
+                .withJmsAcknowledgeMode(Session.AUTO_ACKNOWLEDGE)
+                .withJmsTransactional(true)
+                .withMessageProducer(new SimpleTridentJmsMessageProducer());
+        return new JmsStateFactory(options);
+    }
+
+    public static TridentJmsSpout getTridentJmsSpouts(String jmsUrl, String queueName, Map topologyConfig, String... fields) throws Exception {
+        TridentJmsSpout spout = new TridentJmsSpout()
+                .named("jmsSpout")
+                .withJmsAcknowledgeMode(Session.AUTO_ACKNOWLEDGE)
+                .withJmsProvider(new SimpleJmsProvider(jmsUrl, queueName))
+                .withTupleProducer(new SimpleJMSTuplePropducer(new Fields(fields)));
+
+        return spout;
+    }
+
     public static HdfsStateFactory getTridentHdfsFactory(String fsUrl, String srcDir, String rotationDir, String... fields) {
         Fields hdfsFields = new Fields(fields);
 
@@ -79,13 +109,13 @@ public class TridentConnectorUtil {
 
         RecordFormat recordFormat = new DelimitedRecordFormat().withFields(hdfsFields);
 
-        FileRotationPolicy rotationPolicy = new FileSizeRotationPolicy(0.001f, FileSizeRotationPolicy.Units.KB);
+        FileRotationPolicy rotationPolicy = new FileSizeRotationPolicy(1f, FileSizeRotationPolicy.Units.KB);
 
         HdfsState.Options options = new HdfsState.HdfsFileOptions()
                 .withFileNameFormat(fileNameFormat)
                 .withRecordFormat(recordFormat)
-                .withRotationPolicy(rotationPolicy)
-                .withFsUrl(fsUrl);
+                .withFsUrl(fsUrl)
+                .withRotationPolicy(rotationPolicy);
 
         return new HdfsStateFactory().withOptions(options);
     }
@@ -110,5 +140,18 @@ public class TridentConnectorUtil {
                 .withTableName(tableName);
 
         return new HBaseStateFactory(options);
+    }
+
+    public static CassandraStateFactory getCassandraStateFactory(String cassandraUrl, String keyspaceName,
+                                                             String rowKeyField, String columnFamily,
+                                                             Map topologyConfig) {
+        Map<String, Object> cassandraConfig = new HashMap<String, Object>();
+        cassandraConfig.put(StormCassandraConstants.CASSANDRA_HOST, cassandraUrl);
+        cassandraConfig.put(StormCassandraConstants.CASSANDRA_KEYSPACE, Lists.newArrayList(keyspaceName));
+        String configKey = "cassandra-config";
+        topologyConfig.put(configKey, cassandraConfig);
+        topologyConfig.put("smoke-test", cassandraConfig);
+
+        return new CassandraStateFactory("smoke-test", null);
     }
 }

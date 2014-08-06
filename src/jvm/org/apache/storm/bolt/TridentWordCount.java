@@ -36,7 +36,7 @@ public class TridentWordCount implements Function {
     @Override
     public void execute(TridentTuple tuple, TridentCollector collector) {
         if(tuple.getValues().isEmpty()) return;
-        String word = new String(tuple.getBinary(0));
+        String word = tuple.getString(0);
         Long count = 1l;
         if(wordCountMap.containsKey(word)) {
             count += wordCountMap.get(word);
